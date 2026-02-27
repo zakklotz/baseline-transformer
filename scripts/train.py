@@ -12,6 +12,7 @@ from nncore.train.optim import build_optimizer  # if exists in nn-core; if not, 
 
 from baseline_transformer.config import ExperimentConfig
 from baseline_transformer.train.build import build_everything
+from baseline_transformer.train.perf import maybe_compile
 
 
 def set_seed(seed: int):
@@ -24,12 +25,14 @@ def set_seed(seed: int):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, required=True)
+    ap.add_argument("--compile", action="store_true")
     args = ap.parse_args()
 
     cfg = ExperimentConfig.load(args.config)
     set_seed(cfg.seed)
 
     model, train_loader, val_loader, _tok = build_everything(cfg)
+    model = maybe_compile(model, enabled=bool(args.compile))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
