@@ -13,6 +13,13 @@ from baseline_transformer.train.build import build_everything
 from baseline_transformer.train.optim import build_optimizer
 from baseline_transformer.train.perf import maybe_compile
 from baseline_transformer.train.schedule import WarmupCosineScheduler
+from baseline_transformer.utils import (
+    count_parameters,
+    save_command,
+    save_git_commit,
+    save_model_stats,
+    save_resolved_config,
+)
 
 
 def set_seed(seed: int) -> None:
@@ -39,6 +46,19 @@ def main() -> None:
     cfg = ExperimentConfig.load(args.config)
     set_seed(cfg.seed)
 
+    deterministic = bool(cfg.train.get("deterministic", False))
+    if deterministic:
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+
+    out_dir = Path(cfg.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    save_resolved_config(cfg.to_dict(), out_dir)
+    save_command(out_dir)
+    save_git_commit(out_dir)
+
     model, train_loader, val_loader, _tok = build_everything(cfg)
     model = maybe_compile(model, enabled=bool(args.compile))
 
@@ -64,20 +84,35 @@ def main() -> None:
     )
     scheduler.set_optimizer_lr(optimizer, step=0)
 
-    out_dir = Path(cfg.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     seq_len_for_tokens = int(cfg.data.get("block_size", cfg.data.get("max_seq_len", 1)))
     tokens_per_microbatch = int(cfg.train["batch_size"]) * seq_len_for_tokens
     tokens_per_step = tokens_per_microbatch * grad_accum_steps
-    recursive = cfg.model.get("type", "standard_transformer") == "recursive_transformer"
-    print(f"model.type={cfg.model.get('type', 'standard_transformer')} recursive={recursive}")
+    model_type = cfg.model.get("type", "standard_transformer")
+    recursive = model_type == "recursive_transformer"
+    recurrence_steps = int(cfg.model.get("depth", 1)) if recursive else 0
+
+    total_params, trainable_params = count_parameters(model)
+    print(f"model.type={model_type} recursive={recursive} recurrence_steps={recurrence_steps}")
+    print(f"params total={total_params:,} trainable={trainable_params:,}")
     print(
         "effective_batch_size="
         f"{int(cfg.train['batch_size']) * grad_accum_steps} "
         f"(batch_size={int(cfg.train['batch_size'])}, grad_accum_steps={grad_accum_steps})"
     )
     print(f"tokens_per_microbatch~{tokens_per_microbatch}, tokens_per_step~{tokens_per_step}")
+    print(f"deterministic={deterministic}")
+
+    model_stats = save_model_stats(
+        out_dir,
+        model_type=model_type,
+        recursive=recursive,
+        recurrence_steps=recurrence_steps,
+        total_params=total_params,
+        trainable_params=trainable_params,
+        effective_batch_size=int(cfg.train["batch_size"]) * grad_accum_steps,
+    )
+    print(model_stats.strip())
 
     model.train()
     optimizer.zero_grad(set_to_none=True)

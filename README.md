@@ -80,6 +80,24 @@ data:
 `data.stride` is interpreted as eval stride by default; training stays non-overlapping unless `data.train_stride` is explicitly set.
 `data.num_workers` controls DataLoader workers in normal runs, while pytest runs force `num_workers=0` to avoid fork warnings.
 
+## Reproducibility and run metadata
+
+Training supports an optional deterministic mode:
+
+```yaml
+train:
+  deterministic: true  # default false
+```
+
+When enabled, training uses deterministic PyTorch algorithms and deterministic cuDNN settings.
+
+Every training run also writes run artifacts into `out_dir`:
+
+- `config.resolved.yaml` (resolved config used for the run)
+- `command.txt` (CLI command used)
+- `git_commit.txt` (best-effort current commit hash when available)
+- `model_stats.txt` (model type/recurrence metadata and parameter counts)
+
 ## Recursive mode
 
 Set `model.type: recursive_transformer` to enable recursion using `nn-core` recurrence flags.
