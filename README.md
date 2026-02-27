@@ -54,6 +54,22 @@ The parity baseline config is at:
 
 It defines model shape, data/tokenizer settings, and training loop hyperparameters used for fair comparisons.
 
+## Packed LM mode
+
+For standard language-model perplexity comparisons (especially on WikiText-103), packed token-stream mode is available.
+
+When enabled, the dataset pipeline tokenizes each row, concatenates all tokens into one stream, and chunks contiguous fixed-size blocks.
+
+Enable via config:
+
+```yaml
+data:
+  packing: true
+  block_size: 512  # defaults to data.max_seq_len if omitted
+```
+
+Default remains `packing: false` to preserve the existing per-row tokenization path.
+
 ## Recursive mode
 
 Set `model.type: recursive_transformer` to enable recursion using `nn-core` recurrence flags.
