@@ -1,0 +1,34 @@
+seed: 1337
+out_dir: runs/wt103_512d_standard
+
+model:
+  type: standard_transformer
+  transformer:
+    vocab_size: 50257
+    max_seq_len: 512
+    d_model: 512
+    n_heads: 8
+    n_layers: 6
+    d_ff: 2048
+    dropout: 0.1
+
+data:
+  name: wikitext103
+  split_train: train
+  split_val: validation
+  tokenizer: gpt2
+  max_seq_len: 512
+  packing: false
+  block_size: 512
+  num_workers: 0
+
+train:
+  batch_size: 4
+  grad_accum_steps: 8   # effective 32
+  lr: 0.0005
+  weight_decay: 0.1
+  warmup_steps: 2000
+  max_steps: 10000
+  grad_clip: 1.0
+  log_every: 50
+  eval_every: 500

@@ -17,13 +17,13 @@ This project expects `nn-core` to be available as a dependency in your environme
 Use either the installed console script:
 
 ```bash
-bt-train --config configs/parity/wt103_512d.yaml
+bt-train --config configs/parity/wt103_512d_standard.yaml
 ```
 
 or the repository script wrapper:
 
 ```bash
-python scripts/train.py --config configs/parity/wt103_512d.yaml
+python scripts/train.py --config configs/parity/wt103_512d_standard.yaml
 ```
 
 ## Evaluate
@@ -31,28 +31,33 @@ python scripts/train.py --config configs/parity/wt103_512d.yaml
 Use either the installed console script:
 
 ```bash
-bt-eval --config configs/parity/wt103_512d.yaml
+bt-eval --config configs/parity/wt103_512d_standard.yaml
 ```
 
 or the repository script wrapper:
 
 ```bash
-python scripts/eval.py --config configs/parity/wt103_512d.yaml
+python scripts/eval.py --config configs/parity/wt103_512d_standard.yaml
 ```
 
 Optionally pass a checkpoint for evaluation:
 
 ```bash
-bt-eval --config configs/parity/wt103_512d.yaml --ckpt /path/to/model.pt
+bt-eval --config configs/parity/wt103_512d_standard.yaml --ckpt /path/to/model.pt
 ```
 
 ## Parity config
 
-The parity baseline config is at:
+The explicit parity baseline configs are:
+
+- `configs/parity/wt103_512d_standard.yaml`
+- `configs/parity/wt103_512d_recursive.yaml`
+
+The original config remains available for backward compatibility:
 
 - `configs/parity/wt103_512d.yaml`
 
-It defines model shape, data/tokenizer settings, and training loop hyperparameters used for fair comparisons.
+All three define model shape, data/tokenizer settings, and training loop hyperparameters for fair comparisons.
 
 ## Packed LM mode
 
