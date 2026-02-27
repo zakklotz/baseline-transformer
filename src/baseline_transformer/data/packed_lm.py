@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import torch
@@ -12,8 +13,9 @@ class PackedLMDataset(Dataset):
     """Packed token-stream dataset for causal LM training/eval.
 
     Steps:
-    - load HF dataset split
+    - load HF dataset split (or use provided in-memory texts)
     - tokenize each non-empty text row (no added special tokens)
+    - optionally append eos token separator between rows
     - concatenate token ids into one stream
     - split into contiguous fixed-size blocks
     """
@@ -26,6 +28,7 @@ class PackedLMDataset(Dataset):
         block_size: int = 512,
         text_column: str = "text",
         stride: int | None = None,
+        texts: Iterable[str] | None = None,
     ):
         self.block_size = int(block_size)
         if self.block_size <= 0:
@@ -35,12 +38,16 @@ class PackedLMDataset(Dataset):
         if step <= 0:
             raise ValueError("stride must be > 0 when provided")
 
-        ds = load_lm_dataset(name, split)
+        if texts is None:
+            ds = load_lm_dataset(name, split)
+            text_iter = (ex.get(text_column, "") for ex in ds)
+        else:
+            text_iter = texts
+
         eos_id = getattr(tokenizer, "eos_token_id", None)
 
         token_ids: list[int] = []
-        for ex in ds:
-            text = ex.get(text_column, "")
+        for text in text_iter:
             if not isinstance(text, str):
                 continue
             text = text.strip()

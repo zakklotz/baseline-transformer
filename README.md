@@ -26,6 +26,8 @@ or the repository script wrapper:
 python scripts/train.py --config configs/parity/wt103_512d_standard.yaml
 ```
 
+Training logs include token counts and throughput (`tokens_step`, `tokens_total`, `tok_s`) for fair comparisons, and are also written to `<out_dir>/train_log.csv`.
+
 ## Evaluate
 
 Use either the installed console script:

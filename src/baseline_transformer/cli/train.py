@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -84,7 +86,6 @@ def main() -> None:
     )
     scheduler.set_optimizer_lr(optimizer, step=0)
 
-
     seq_len_for_tokens = int(cfg.data.get("block_size", cfg.data.get("max_seq_len", 1)))
     tokens_per_microbatch = int(cfg.train["batch_size"]) * seq_len_for_tokens
     tokens_per_step = tokens_per_microbatch * grad_accum_steps
@@ -114,57 +115,87 @@ def main() -> None:
     )
     print(model_stats.strip())
 
+    train_log_path = out_dir / "train_log.csv"
+    train_log_f = train_log_path.open("w", encoding="utf-8", newline="")
+    train_log = csv.writer(train_log_f)
+    train_log.writerow(["step", "loss", "lr", "tokens_step", "tokens_total", "wall_time_sec"])
+
     model.train()
     optimizer.zero_grad(set_to_none=True)
 
     train_iter = iter(train_loader)
     micro_step = 0
     optimizer_step = 0
-    total_tokens = 0
+    tokens_total = 0
     accum_loss = 0.0
+    tokens_this_step = 0
+    interval_tokens = 0
+    interval_start_time = time.time()
+    step_start_time = interval_start_time
 
-    while optimizer_step < max_steps:
-        try:
-            batch = next(train_iter)
-        except StopIteration:
-            train_iter = iter(train_loader)
-            batch = next(train_iter)
+    try:
+        while optimizer_step < max_steps:
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                train_iter = iter(train_loader)
+                batch = next(train_iter)
 
-        batch = {k: v.to(device) for k, v in batch.items()}
-        out = model(**batch)
-        loss = out["loss"] if isinstance(out, dict) else out.loss
+            batch = {k: v.to(device) for k, v in batch.items()}
+            out = model(**batch)
+            loss = out["loss"] if isinstance(out, dict) else out.loss
 
-        loss_value = float(loss.item())
-        total_tokens += _batch_token_count(batch)
-        micro_step += 1
-        accum_loss += loss_value
+            loss_value = float(loss.item())
+            micro_tokens = _batch_token_count(batch)
+            tokens_total += micro_tokens
+            tokens_this_step += micro_tokens
+            micro_step += 1
+            accum_loss += loss_value
 
-        (loss / grad_accum_steps).backward()
+            (loss / grad_accum_steps).backward()
 
-        if micro_step % grad_accum_steps != 0:
-            continue
+            if micro_step % grad_accum_steps != 0:
+                continue
 
-        optimizer_step += 1
-        if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer_step += 1
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        lr = scheduler.set_optimizer_lr(optimizer, step=optimizer_step)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            lr = scheduler.set_optimizer_lr(optimizer, step=optimizer_step)
 
-        avg_loss = accum_loss / grad_accum_steps
-        accum_loss = 0.0
+            avg_loss = accum_loss / grad_accum_steps
+            step_tokens = tokens_this_step
+            accum_loss = 0.0
+            tokens_this_step = 0
 
-        if log_every > 0 and optimizer_step % log_every == 0:
-            print(
-                f"step={optimizer_step}/{max_steps} "
-                f"loss={avg_loss:.4f} lr={lr:.6g} tokens={total_tokens}"
+            step_end_time = time.time()
+            step_wall_time = step_end_time - step_start_time
+            train_log.writerow(
+                [optimizer_step, f"{avg_loss:.6f}", f"{lr:.12g}", step_tokens, tokens_total, f"{step_wall_time:.6f}"]
             )
 
-        if eval_every > 0 and optimizer_step % eval_every == 0:
-            ppl = compute_ppl(model, val_loader, device=device)
-            print(f"eval step={optimizer_step} ppl={ppl:.4f}")
-            model.train()
+            interval_tokens += step_tokens
+            if log_every > 0 and optimizer_step % log_every == 0:
+                elapsed = max(step_end_time - interval_start_time, 1e-12)
+                tokens_per_sec = interval_tokens / elapsed
+                print(
+                    f"step={optimizer_step}/{max_steps} "
+                    f"loss={avg_loss:.4f} lr={lr:.6g} "
+                    f"tokens_step={step_tokens} tokens_total={tokens_total} tok_s={tokens_per_sec:.1f}"
+                )
+                interval_start_time = step_end_time
+                interval_tokens = 0
+
+            if eval_every > 0 and optimizer_step % eval_every == 0:
+                ppl = compute_ppl(model, val_loader, device=device)
+                print(f"eval step={optimizer_step} ppl={ppl:.4f}")
+                model.train()
+
+            step_start_time = time.time()
+    finally:
+        train_log_f.close()
 
     torch.save(model.state_dict(), out_dir / "model.pt")
     print(f"saved checkpoint: {out_dir / 'model.pt'}")
