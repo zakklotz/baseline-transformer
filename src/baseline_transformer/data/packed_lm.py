@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -26,10 +25,15 @@ class PackedLMDataset(Dataset):
         tokenizer: Any,
         block_size: int = 512,
         text_column: str = "text",
+        stride: int | None = None,
     ):
         self.block_size = int(block_size)
         if self.block_size <= 0:
             raise ValueError("block_size must be > 0")
+
+        step = self.block_size if stride is None else int(stride)
+        if step <= 0:
+            raise ValueError("stride must be > 0 when provided")
 
         ds = load_lm_dataset(name, split)
 
@@ -46,23 +50,21 @@ class PackedLMDataset(Dataset):
             if ids:
                 token_ids.extend(ids)
 
-        if not token_ids:
-            self.blocks = np.zeros((0, self.block_size), dtype=np.int64)
+        self.stream = torch.tensor(token_ids, dtype=torch.long)
+
+        if self.stream.numel() < self.block_size:
+            self.starts: list[int] = []
             return
 
-        usable = (len(token_ids) // self.block_size) * self.block_size
-        if usable == 0:
-            self.blocks = np.zeros((0, self.block_size), dtype=np.int64)
-            return
-
-        stream = np.asarray(token_ids[:usable], dtype=np.int64)
-        self.blocks = stream.reshape(-1, self.block_size)
+        max_start = self.stream.numel() - self.block_size
+        self.starts = list(range(0, max_start + 1, step))
 
     def __len__(self) -> int:
-        return int(self.blocks.shape[0])
+        return len(self.starts)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        input_ids = torch.from_numpy(self.blocks[idx]).to(torch.long)
+        start = self.starts[idx]
+        input_ids = self.stream[start : start + self.block_size]
         attention_mask = torch.ones(self.block_size, dtype=torch.long)
         labels = input_ids.clone()
         return {

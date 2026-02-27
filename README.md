@@ -66,9 +66,12 @@ Enable via config:
 data:
   packing: true
   block_size: 512  # defaults to data.max_seq_len if omitted
+  # optional: stride for overlapping windows (None => non-overlapping blocks)
+  # stride: 256
 ```
 
 Default remains `packing: false` to preserve the existing per-row tokenization path.
+`data.num_workers` controls DataLoader workers in normal runs, while pytest runs force `num_workers=0` to avoid fork warnings.
 
 ## Recursive mode
 

@@ -15,21 +15,24 @@ def build_everything(cfg: ExperimentConfig):
     tok = get_tokenizer(cfg.data.get("tokenizer", "gpt2"))
 
     in_pytest = "PYTEST_CURRENT_TEST" in os.environ
-    num_workers = 0 if in_pytest else int(cfg.train.get("num_workers", 0))
+    num_workers = 0 if in_pytest else int(cfg.data.get("num_workers", 0))
 
     if bool(cfg.data.get("packing", False)):
         block_size = int(cfg.data.get("block_size", cfg.data["max_seq_len"]))
+        stride = cfg.data.get("stride", None)
         train_ds = PackedLMDataset(
             name=cfg.data["name"],
             split=cfg.data.get("split_train", "train"),
             tokenizer=tok,
             block_size=block_size,
+            stride=stride,
         )
         val_ds = PackedLMDataset(
             name=cfg.data["name"],
             split=cfg.data.get("split_val", "validation"),
             tokenizer=tok,
             block_size=block_size,
+            stride=stride,
         )
         train_loader = DataLoader(
             train_ds,

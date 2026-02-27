@@ -20,6 +20,7 @@ data:
   max_seq_len: 512
   packing: false
   block_size: 512
+  num_workers: 0
 
 train:
   batch_size: 4
