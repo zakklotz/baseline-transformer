@@ -18,6 +18,8 @@ data:
   split_val: validation
   tokenizer: gpt2
   max_seq_len: 512
+  packing: false
+  block_size: 512
 
 train:
   batch_size: 4

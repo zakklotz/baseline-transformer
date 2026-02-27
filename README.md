@@ -4,21 +4,78 @@ Reusable transformer baseline harness built on `nn-core`.
 
 ## Install
 
-Recommended (sibling repos):
+Create a virtual environment, then install this project in editable mode with dev extras:
+
 ```bash
-# in a venv
-pip install -e ../nn-core
-pip install -e .
-Train
+pip install -e .[dev]
+```
+
+This project expects `nn-core` to be available as a dependency in your environment (for example via editable install from a sibling checkout).
+
+## Train
+
+Use either the installed console script:
+
+```bash
+bt-train --config configs/parity/wt103_512d.yaml
+```
+
+or the repository script wrapper:
+
+```bash
 python scripts/train.py --config configs/parity/wt103_512d.yaml
-Eval
+```
+
+## Evaluate
+
+Use either the installed console script:
+
+```bash
+bt-eval --config configs/parity/wt103_512d.yaml
+```
+
+or the repository script wrapper:
+
+```bash
 python scripts/eval.py --config configs/parity/wt103_512d.yaml
-Config overview
+```
 
-model.type: standard_transformer or recursive_transformer
+Optionally pass a checkpoint for evaluation:
 
-model.transformer: passed into nncore.models.TransformerConfig
+```bash
+bt-eval --config configs/parity/wt103_512d.yaml --ckpt /path/to/model.pt
+```
 
-data: dataset/tokenizer/max_seq_len
+## Parity config
 
-train: optimizer and loop settings
+The parity baseline config is at:
+
+- `configs/parity/wt103_512d.yaml`
+
+It defines model shape, data/tokenizer settings, and training loop hyperparameters used for fair comparisons.
+
+## Packed LM mode
+
+For standard language-model perplexity comparisons (especially on WikiText-103), packed token-stream mode is available.
+
+When enabled, the dataset pipeline tokenizes each row, concatenates all tokens into one stream, and chunks contiguous fixed-size blocks.
+
+Enable via config:
+
+```yaml
+data:
+  packing: true
+  block_size: 512  # defaults to data.max_seq_len if omitted
+```
+
+Default remains `packing: false` to preserve the existing per-row tokenization path.
+
+## Recursive mode
+
+Set `model.type: recursive_transformer` to enable recursion using `nn-core` recurrence flags.
+
+When enabled, baseline-transformer maps config values onto nn-core transformer settings by:
+
+- setting `recursive=True`
+- setting `recurrence_steps=model.depth`
+- forcing `num_decoder_layers=1` so recursion is unambiguously a single shared block applied for `N` steps
