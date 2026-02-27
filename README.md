@@ -63,7 +63,7 @@ All three define model shape, data/tokenizer settings, and training loop hyperpa
 
 For standard language-model perplexity comparisons (especially on WikiText-103), packed token-stream mode is available.
 
-When enabled, the dataset pipeline tokenizes each row, concatenates all tokens into one stream, and chunks contiguous fixed-size blocks.
+When enabled, the dataset pipeline tokenizes each non-empty row, appends `eos_token_id` separators when available, concatenates all tokens into one stream, and chunks contiguous fixed-size blocks.
 
 Enable via config:
 
@@ -71,11 +71,13 @@ Enable via config:
 data:
   packing: true
   block_size: 512  # defaults to data.max_seq_len if omitted
-  # optional: stride for overlapping windows (None => non-overlapping blocks)
+  # optional eval overlap (defaults to non-overlapping)
   # stride: 256
+  # optional training overlap override (default: non-overlapping)
+  # train_stride: 256
 ```
 
-Default remains `packing: false` to preserve the existing per-row tokenization path.
+`data.stride` is interpreted as eval stride by default; training stays non-overlapping unless `data.train_stride` is explicitly set.
 `data.num_workers` controls DataLoader workers in normal runs, while pytest runs force `num_workers=0` to avoid fork warnings.
 
 ## Recursive mode

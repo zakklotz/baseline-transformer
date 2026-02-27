@@ -36,6 +36,7 @@ class PackedLMDataset(Dataset):
             raise ValueError("stride must be > 0 when provided")
 
         ds = load_lm_dataset(name, split)
+        eos_id = getattr(tokenizer, "eos_token_id", None)
 
         token_ids: list[int] = []
         for ex in ds:
@@ -49,6 +50,8 @@ class PackedLMDataset(Dataset):
             ids = tokenizer.encode(text, add_special_tokens=False)
             if ids:
                 token_ids.extend(ids)
+                if eos_id is not None:
+                    token_ids.append(int(eos_id))
 
         self.stream = torch.tensor(token_ids, dtype=torch.long)
 

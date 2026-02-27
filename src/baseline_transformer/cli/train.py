@@ -86,6 +86,7 @@ def main() -> None:
     micro_step = 0
     optimizer_step = 0
     total_tokens = 0
+    accum_loss = 0.0
 
     while optimizer_step < max_steps:
         try:
@@ -98,8 +99,10 @@ def main() -> None:
         out = model(**batch)
         loss = out["loss"] if isinstance(out, dict) else out.loss
 
+        loss_value = float(loss.item())
         total_tokens += _batch_token_count(batch)
         micro_step += 1
+        accum_loss += loss_value
 
         (loss / grad_accum_steps).backward()
 
@@ -114,10 +117,13 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         lr = scheduler.set_optimizer_lr(optimizer, step=optimizer_step)
 
+        avg_loss = accum_loss / grad_accum_steps
+        accum_loss = 0.0
+
         if log_every > 0 and optimizer_step % log_every == 0:
             print(
                 f"step={optimizer_step}/{max_steps} "
-                f"loss={float(loss.item()):.4f} lr={lr:.6g} tokens={total_tokens}"
+                f"loss={avg_loss:.4f} lr={lr:.6g} tokens={total_tokens}"
             )
 
         if eval_every > 0 and optimizer_step % eval_every == 0:

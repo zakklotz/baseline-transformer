@@ -19,20 +19,21 @@ def build_everything(cfg: ExperimentConfig):
 
     if bool(cfg.data.get("packing", False)):
         block_size = int(cfg.data.get("block_size", cfg.data["max_seq_len"]))
-        stride = cfg.data.get("stride", None)
+        train_stride = cfg.data.get("train_stride", None)
+        eval_stride = cfg.data.get("stride", None)
         train_ds = PackedLMDataset(
             name=cfg.data["name"],
             split=cfg.data.get("split_train", "train"),
             tokenizer=tok,
             block_size=block_size,
-            stride=stride,
+            stride=train_stride,
         )
         val_ds = PackedLMDataset(
             name=cfg.data["name"],
             split=cfg.data.get("split_val", "validation"),
             tokenizer=tok,
             block_size=block_size,
-            stride=stride,
+            stride=eval_stride,
         )
         train_loader = DataLoader(
             train_ds,
