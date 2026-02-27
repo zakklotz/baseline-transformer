@@ -5,15 +5,64 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "baseline-transformer"
 version = "0.1.0"
+description = "Reusable transformer baseline harness built on nn-core."
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-  "torch",
-  "pyyaml",
-  "tqdm",
+license = { text = "MIT" }
+authors = [
+  { name = "Zak Klotz" }
+]
+keywords = ["transformer", "baseline", "language-modeling", "pytorch"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
 ]
 
+dependencies = [
+  "torch>=2.2",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "numpy>=1.24",
+  "datasets>=2.18",
+  "transformers>=4.40",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.3",
+]
+
+# If you later want TensorBoard or Weights & Biases, keep them optional
+loggers = [
+  "tensorboard>=2.16",
+  "wandb>=0.16",
+]
+
+[project.scripts]
+bt-train = "baseline_transformer.cli.train:main"
+bt-eval  = "baseline_transformer.cli.eval:main"
+
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["baseline_transformer"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
