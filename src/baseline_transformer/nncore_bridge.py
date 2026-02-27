@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from nncore.models import TransformerConfig
-from nncore.models.config import BlockConfig, AttentionConfig
+from nncore.models.config import AttentionConfig, BlockConfig
 
 
 def build_transformer_config(model_cfg: Dict[str, Any]) -> TransformerConfig:
@@ -14,15 +14,24 @@ def build_transformer_config(model_cfg: Dict[str, Any]) -> TransformerConfig:
       vocab_size: int
       max_seq_len: int
       d_model: int
-      n_heads: int
-      n_layers: int            # interpreted as decoder-only layers for causal LM
-      d_ff: int                # maps to BlockConfig.mlp_dims = [d_model, d_ff, d_model]
-      dropout: float           # maps to AttentionConfig.dropout_p and resid_dropout_p
+      n_heads: int (or num_heads)
+      n_layers: int              # interpreted as decoder-only layers for causal LM
+      d_ff: int                  # maps to BlockConfig.mlp_dims = [d_model, d_ff, d_model]
+      dropout: float             # maps to AttentionConfig.dropout_p and resid_dropout_p
 
-    nn-core TransformerConfig signature:
-      (vocab_size, d_model, num_heads, max_seq_len,
-       num_encoder_layers, num_decoder_layers,
-       positional, ..., attn: AttentionConfig, block: BlockConfig)
+      attn_backend: str           # default "sdpa" (fast path)
+      backend: str                # default "manual" (nn-core internal)
+      positional: str             # default "absolute"
+      tie_weights: bool           # default True
+      return_hidden: bool         # default False
+
+      recursive: bool             # default False
+      recurrence_steps: int       # default 1
+
+    nn-core TransformerConfig signature includes:
+      vocab_size, d_model, num_heads, max_seq_len,
+      num_encoder_layers, num_decoder_layers,
+      positional, ..., attn: AttentionConfig, block: BlockConfig
     """
     if "transformer" not in model_cfg:
         raise KeyError("model.transformer missing from config")
@@ -34,7 +43,8 @@ def build_transformer_config(model_cfg: Dict[str, Any]) -> TransformerConfig:
     num_heads = int(t.get("n_heads", t.get("num_heads", 8)))
     max_seq_len = int(t.get("max_seq_len", 2048))
 
-    # decoder-only default for LM
+    # Decoder-only default for LM:
+    # - prefer n_layers (project-friendly) as decoder layers
     n_layers = int(t.get("n_layers", 0))
     if n_layers > 0:
         num_encoder_layers = 0
@@ -55,15 +65,21 @@ def build_transformer_config(model_cfg: Dict[str, Any]) -> TransformerConfig:
 
     block = BlockConfig(
         mlp_dims=mlp_dims,
-        # keep norm defaults unless you add them to YAML later
+        # Keep norm defaults unless you add them to YAML later.
     )
 
+    # Make attention backend explicit (SDPA fast path by default)
+    attn_backend = str(t.get("attn_backend", "sdpa"))
+    backend = str(t.get("backend", "manual"))
+
     attn = AttentionConfig(
+        backend=backend,
+        attn_backend=attn_backend,
         dropout_p=dropout,
         resid_dropout_p=dropout,
     )
 
-    positional = t.get("positional", "absolute")
+    positional = str(t.get("positional", "absolute"))
     tie_weights = bool(t.get("tie_weights", True))
     return_hidden = bool(t.get("return_hidden", False))
 
@@ -85,3 +101,4 @@ def build_transformer_config(model_cfg: Dict[str, Any]) -> TransformerConfig:
         attn=attn,
         block=block,
     )
+  

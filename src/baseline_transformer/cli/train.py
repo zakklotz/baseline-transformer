@@ -24,6 +24,15 @@ from baseline_transformer.utils import (
 )
 
 
+def _tqdm(total: int, desc: str):
+    """Optional tqdm progress bar (no hard dependency)."""
+    try:
+        from tqdm.auto import tqdm  # type: ignore
+        return tqdm(total=total, desc=desc)
+    except Exception:
+        return None
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -61,10 +70,42 @@ def main() -> None:
     save_command(out_dir)
     save_git_commit(out_dir)
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # --- Speed knobs (recommended defaults on CUDA) ---
+    # These are config-driven so Tajalli can share the same infra later.
+    use_tf32 = bool(cfg.train.get("tf32", True)) and device == "cuda"
+    if use_tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        # "high" enables TF32 matmul where applicable (Ada GPUs benefit)
+        torch.set_float32_matmul_precision("high")
+
+    use_amp = bool(cfg.train.get("amp", True)) and device == "cuda"
+    amp_dtype = str(cfg.train.get("amp_dtype", "bf16")).lower()
+    if amp_dtype in ("bf16", "bfloat16"):
+        autocast_dtype = torch.bfloat16
+        need_grad_scaler = False
+    elif amp_dtype in ("fp16", "float16"):
+        autocast_dtype = torch.float16
+        # FP16 usually wants GradScaler; we keep it optional (off by default).
+        need_grad_scaler = bool(cfg.train.get("grad_scaler", True))
+    else:
+        raise ValueError("train.amp_dtype must be one of: bf16, fp16")
+
+    grad_scaler = torch.amp.GradScaler(enabled=(device == "cuda" and use_amp and need_grad_scaler))
+
+    print(
+        f"device={device} tf32={use_tf32} amp={use_amp} amp_dtype={amp_dtype} grad_scaler={grad_scaler.is_enabled()}",
+        flush=True,
+    )
+
+    print("building model + dataloaders...", flush=True)
     model, train_loader, val_loader, _tok = build_everything(cfg)
+
+    # Compile note: first step(s) can be slower due to compilation overhead.
     model = maybe_compile(model, enabled=bool(args.compile))
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
     base_lr = float(cfg.train["lr"])
@@ -94,15 +135,16 @@ def main() -> None:
     recurrence_steps = int(cfg.model.get("depth", 1)) if recursive else 0
 
     total_params, trainable_params = count_parameters(model)
-    print(f"model.type={model_type} recursive={recursive} recurrence_steps={recurrence_steps}")
-    print(f"params total={total_params:,} trainable={trainable_params:,}")
+    print(f"model.type={model_type} recursive={recursive} recurrence_steps={recurrence_steps}", flush=True)
+    print(f"params total={total_params:,} trainable={trainable_params:,}", flush=True)
     print(
         "effective_batch_size="
         f"{int(cfg.train['batch_size']) * grad_accum_steps} "
-        f"(batch_size={int(cfg.train['batch_size'])}, grad_accum_steps={grad_accum_steps})"
+        f"(batch_size={int(cfg.train['batch_size'])}, grad_accum_steps={grad_accum_steps})",
+        flush=True,
     )
-    print(f"tokens_per_microbatch~{tokens_per_microbatch}, tokens_per_step~{tokens_per_step}")
-    print(f"deterministic={deterministic}")
+    print(f"tokens_per_microbatch~{tokens_per_microbatch}, tokens_per_step~{tokens_per_step}", flush=True)
+    print(f"deterministic={deterministic}", flush=True)
 
     model_stats = save_model_stats(
         out_dir,
@@ -113,7 +155,7 @@ def main() -> None:
         trainable_params=trainable_params,
         effective_batch_size=int(cfg.train["batch_size"]) * grad_accum_steps,
     )
-    print(model_stats.strip())
+    print(model_stats.strip(), flush=True)
 
     train_log_path = out_dir / "train_log.csv"
     train_log_f = train_log_path.open("w", encoding="utf-8", newline="")
@@ -133,6 +175,8 @@ def main() -> None:
     interval_start_time = time.time()
     step_start_time = interval_start_time
 
+    pbar = _tqdm(max_steps, desc="train steps")
+
     try:
         while optimizer_step < max_steps:
             try:
@@ -142,8 +186,15 @@ def main() -> None:
                 batch = next(train_iter)
 
             batch = {k: v.to(device) for k, v in batch.items()}
-            out = model(**batch)
-            loss = out["loss"] if isinstance(out, dict) else out.loss
+
+            # ---- Forward (AMP if enabled) ----
+            if use_amp:
+                with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+                    out = model(**batch)
+                    loss = out["loss"] if isinstance(out, dict) else out.loss
+            else:
+                out = model(**batch)
+                loss = out["loss"] if isinstance(out, dict) else out.loss
 
             loss_value = float(loss.item())
             micro_tokens = _batch_token_count(batch)
@@ -152,16 +203,30 @@ def main() -> None:
             micro_step += 1
             accum_loss += loss_value
 
-            (loss / grad_accum_steps).backward()
+            # ---- Backward (GradScaler only if enabled; bf16 doesn't need it) ----
+            loss_scaled = loss / grad_accum_steps
+            if grad_scaler.is_enabled():
+                grad_scaler.scale(loss_scaled).backward()
+            else:
+                loss_scaled.backward()
 
             if micro_step % grad_accum_steps != 0:
                 continue
 
             optimizer_step += 1
+
             if grad_clip > 0:
+                if grad_scaler.is_enabled():
+                    # Unscale before clipping
+                    grad_scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-            optimizer.step()
+            if grad_scaler.is_enabled():
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+            else:
+                optimizer.step()
+
             optimizer.zero_grad(set_to_none=True)
             lr = scheduler.set_optimizer_lr(optimizer, step=optimizer_step)
 
@@ -177,28 +242,40 @@ def main() -> None:
             )
 
             interval_tokens += step_tokens
+
+            # Update progress bar every optimizer step
+            if pbar is not None:
+                elapsed = max(step_end_time - interval_start_time, 1e-12)
+                tok_s = interval_tokens / elapsed
+                pbar.update(1)
+                pbar.set_postfix(loss=f"{avg_loss:.4f}", lr=f"{lr:.2e}", tok_s=f"{tok_s:.0f}")
+
             if log_every > 0 and optimizer_step % log_every == 0:
                 elapsed = max(step_end_time - interval_start_time, 1e-12)
                 tokens_per_sec = interval_tokens / elapsed
                 print(
                     f"step={optimizer_step}/{max_steps} "
                     f"loss={avg_loss:.4f} lr={lr:.6g} "
-                    f"tokens_step={step_tokens} tokens_total={tokens_total} tok_s={tokens_per_sec:.1f}"
+                    f"tokens_step={step_tokens} tokens_total={tokens_total} tok_s={tokens_per_sec:.1f}",
+                    flush=True,
                 )
                 interval_start_time = step_end_time
                 interval_tokens = 0
 
             if eval_every > 0 and optimizer_step % eval_every == 0:
+                # Eval uses existing compute_ppl (typically no_grad inside), keep it simple.
                 ppl = compute_ppl(model, val_loader, device=device)
-                print(f"eval step={optimizer_step} ppl={ppl:.4f}")
+                print(f"eval step={optimizer_step} ppl={ppl:.4f}", flush=True)
                 model.train()
 
             step_start_time = time.time()
     finally:
+        if pbar is not None:
+            pbar.close()
         train_log_f.close()
 
     torch.save(model.state_dict(), out_dir / "model.pt")
-    print(f"saved checkpoint: {out_dir / 'model.pt'}")
+    print(f"saved checkpoint: {out_dir / 'model.pt'}", flush=True)
 
 
 if __name__ == "__main__":

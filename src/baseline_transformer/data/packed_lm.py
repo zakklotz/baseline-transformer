@@ -9,6 +9,15 @@ from torch.utils.data import Dataset
 from baseline_transformer.data.hf_datasets import load_lm_dataset
 
 
+def _tqdm(iterable, *, total=None, desc=None):
+    """Optional tqdm wrapper (no hard dependency)."""
+    try:
+        from tqdm.auto import tqdm  # type: ignore
+        return tqdm(iterable, total=total, desc=desc)
+    except Exception:
+        return iterable
+
+
 class PackedLMDataset(Dataset):
     """Packed token-stream dataset for causal LM training/eval.
 
@@ -38,27 +47,41 @@ class PackedLMDataset(Dataset):
         if step <= 0:
             raise ValueError("stride must be > 0 when provided")
 
-        if texts is None:
-            ds = load_lm_dataset(name, split)
-            text_iter = (ex.get(text_column, "") for ex in ds)
-        else:
-            text_iter = texts
-
         eos_id = getattr(tokenizer, "eos_token_id", None)
 
         token_ids: list[int] = []
-        for text in text_iter:
-            if not isinstance(text, str):
-                continue
-            text = text.strip()
-            if not text:
-                continue
 
-            ids = tokenizer.encode(text, add_special_tokens=False)
-            if ids:
-                token_ids.extend(ids)
-                if eos_id is not None:
-                    token_ids.append(int(eos_id))
+        if texts is None:
+            ds = load_lm_dataset(name, split)
+            total = len(ds) if hasattr(ds, "__len__") else None
+            it = _tqdm(ds, total=total, desc=f"Packing {name}:{split}")
+            for ex in it:
+                text = ex.get(text_column, "")
+                if not isinstance(text, str):
+                    continue
+                text = text.strip()
+                if not text:
+                    continue
+
+                ids = tokenizer.encode(text, add_special_tokens=False)
+                if ids:
+                    token_ids.extend(ids)
+                    if eos_id is not None:
+                        token_ids.append(int(eos_id))
+        else:
+            it = _tqdm(texts, desc="Packing texts")
+            for text in it:
+                if not isinstance(text, str):
+                    continue
+                text = text.strip()
+                if not text:
+                    continue
+
+                ids = tokenizer.encode(text, add_special_tokens=False)
+                if ids:
+                    token_ids.extend(ids)
+                    if eos_id is not None:
+                        token_ids.append(int(eos_id))
 
         self.stream = torch.tensor(token_ids, dtype=torch.long)
 

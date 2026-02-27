@@ -7,17 +7,8 @@ from baseline_transformer.config import ExperimentConfig
 from baseline_transformer.nncore_bridge import build_transformer_config
 from baseline_transformer.models import StandardTransformerLM, RecursiveTransformerLM
 
-from baseline_transformer.data import (
-    load_lm_dataset,
-    get_tokenizer,
-    CausalLMCollator,
-)
-
-# Optional packed dataset support (only if your repo includes it)
-try:
-    from baseline_transformer.data.packed_lm import PackedLMDataset  # type: ignore
-except Exception:  # pragma: no cover
-    PackedLMDataset = None  # type: ignore
+from baseline_transformer.data import get_tokenizer, CausalLMCollator, load_lm_dataset
+from baseline_transformer.data.packed_lm import PackedLMDataset
 
 
 def _is_pytest() -> bool:
@@ -26,7 +17,7 @@ def _is_pytest() -> bool:
 
 def build_everything(cfg: ExperimentConfig):
     """
-    Build model, dataloaders, and tokenizer.
+    Build model, train/val dataloaders, and tokenizer.
 
     Returns:
       model, train_loader, val_loader, tokenizer
@@ -35,7 +26,6 @@ def build_everything(cfg: ExperimentConfig):
     tok = get_tokenizer(cfg.data.get("tokenizer", "gpt2"))
 
     # --- DataLoader workers ---
-    # Prefer config-driven, but force 0 under pytest to avoid fork warnings
     num_workers = int(cfg.data.get("num_workers", 0))
     if _is_pytest():
         num_workers = 0
@@ -43,40 +33,42 @@ def build_everything(cfg: ExperimentConfig):
     batch_size = int(cfg.train["batch_size"])
     max_seq_len = int(cfg.data.get("max_seq_len", 512))
 
+    # --- Data mode ---
     packing = bool(cfg.data.get("packing", False))
     block_size = int(cfg.data.get("block_size", max_seq_len))
+    text_column = str(cfg.data.get("text_column", "text"))
 
-    # Per your earlier improvements: interpret data.stride as eval stride by default
+    split_train = str(cfg.data.get("split_train", "train"))
+    split_val = str(cfg.data.get("split_val", "validation"))
+    ds_name = str(cfg.data["name"])
+
+    # Interpret data.stride as eval stride by default (safer comparisons)
     eval_stride = cfg.data.get("stride", None)
     eval_stride = int(eval_stride) if eval_stride is not None else None
+
+    # Allow overriding for training if desired
     train_stride = cfg.data.get("train_stride", None)
     train_stride = int(train_stride) if train_stride is not None else None
 
     if packing:
-        if PackedLMDataset is None:
-            raise RuntimeError(
-                "data.packing=true but PackedLMDataset is not available. "
-                "Ensure baseline_transformer/data/packed_lm.py exists."
-            )
-
-        # Build packed datasets
-        train_base = load_lm_dataset(cfg.data["name"], cfg.data.get("split_train", "train"))
-        val_base = load_lm_dataset(cfg.data["name"], cfg.data.get("split_val", "validation"))
-
+        # Packed dataset loads HF split internally
         train_ds = PackedLMDataset(
-            dataset=train_base,
-            tokenizer=tok,
+            ds_name,
+            split_train,
+            tok,
             block_size=block_size,
-            stride=train_stride,   # default None -> non-overlapping for training
+            text_column=text_column,
+            stride=train_stride,  # default None -> non-overlapping for train
         )
         val_ds = PackedLMDataset(
-            dataset=val_base,
-            tokenizer=tok,
+            ds_name,
+            split_val,
+            tok,
             block_size=block_size,
-            stride=eval_stride,    # optional overlap for eval if configured
+            text_column=text_column,
+            stride=eval_stride,   # optional overlap for eval
         )
 
-        # Packed mode yields fixed-size tensors already; default collate is fine.
         train_loader = DataLoader(
             train_ds,
             batch_size=batch_size,
@@ -91,9 +83,9 @@ def build_everything(cfg: ExperimentConfig):
         )
 
     else:
-        # Classic per-row tokenization path
-        train_ds = load_lm_dataset(cfg.data["name"], cfg.data.get("split_train", "train"))
-        val_ds = load_lm_dataset(cfg.data["name"], cfg.data.get("split_val", "validation"))
+        # Per-row tokenization path (HF dataset object + collator)
+        train_ds = load_lm_dataset(ds_name, split_train)
+        val_ds = load_lm_dataset(ds_name, split_val)
 
         collate = CausalLMCollator(tokenizer=tok, max_seq_len=max_seq_len)
 
@@ -122,8 +114,7 @@ def build_everything(cfg: ExperimentConfig):
     elif model_type == "recursive_transformer":
         depth = int(cfg.model.get("depth", 6))
 
-        # Force unambiguous recursive baseline semantics:
-        # one shared decoder block repeated `depth` times via recurrence.
+        # Force unambiguous semantics: 1 shared decoder block repeated depth times
         tcfg.num_encoder_layers = 0
         tcfg.num_decoder_layers = 1
         tcfg.recursive = True
