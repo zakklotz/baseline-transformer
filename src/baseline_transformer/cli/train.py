@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from baseline_transformer.config import ExperimentConfig
-from baseline_transformer.eval import compute_ppl
+from baseline_transformer.eval import compute_eval_metrics
 from baseline_transformer.train.build import build_everything
 from baseline_transformer.train.optim import build_optimizer
 from baseline_transformer.train.perf import maybe_compile
@@ -48,10 +48,84 @@ def _batch_token_count(batch: dict[str, torch.Tensor]) -> int:
     return int(valid.sum().item())
 
 
+def _get_curriculum_depth_range(step: int, train_cfg: dict) -> tuple[int, int] | None:
+    curriculum = train_cfg.get("depth_curriculum")
+    if not isinstance(curriculum, list) or not curriculum:
+        return None
+    segment = None
+    for entry in curriculum:
+        end_step = int(entry.get("end_step", 0))
+        if step <= end_step:
+            segment = entry
+            break
+    if segment is None:
+        segment = curriculum[-1]
+    depth_min = segment.get("depth_min")
+    depth_max = segment.get("depth_max")
+    if depth_min is None or depth_max is None:
+        return None
+    return int(depth_min), int(depth_max)
+
+
+def _resolve_recurrence_steps(cfg: ExperimentConfig, optimizer_step: int, recursive: bool) -> int | None:
+    if not recursive:
+        return None
+
+    default_depth = int(cfg.model.get("depth", 1))
+    if not bool(cfg.train.get("variable_depth_training", False)):
+        return default_depth
+
+    warmup_steps = int(cfg.train.get("depth_warmup_steps", 0))
+    if warmup_steps > 0 and optimizer_step < warmup_steps:
+        return int(cfg.train.get("depth_warmup_fixed", default_depth))
+
+    curriculum_range = _get_curriculum_depth_range(optimizer_step, cfg.train)
+    if curriculum_range is not None:
+        depth_min, depth_max = curriculum_range
+        return random.randint(depth_min, depth_max)
+
+    return default_depth
+
+
+def _load_checkpoint_state(path: Path) -> dict[str, object]:
+    payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, dict) or "model" not in payload:
+        raise ValueError(f"Checkpoint at {path} is not a training checkpoint with a 'model' entry.")
+    return payload
+
+
+def _save_checkpoint(
+    path: Path,
+    *,
+    model,
+    optimizer,
+    scheduler_step: int,
+    grad_scaler,
+    tokens_total: int,
+    best_val_ppl: float,
+    config: dict,
+) -> None:
+    stateful_model = getattr(model, "_orig_mod", model)
+    torch.save(
+        {
+            "model": stateful_model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler_step": scheduler_step,
+            "scaler": grad_scaler.state_dict() if grad_scaler.is_enabled() else None,
+            "tokens_total": tokens_total,
+            "best_val_ppl": best_val_ppl,
+            "config": config,
+            "step": scheduler_step,
+        },
+        path,
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, required=True)
     ap.add_argument("--compile", action="store_true")
+    ap.add_argument("--resume", type=str, default=None)
     args = ap.parse_args()
 
     cfg = ExperimentConfig.load(args.config)
@@ -103,11 +177,6 @@ def main() -> None:
     print("building model + dataloaders...", flush=True)
     model, train_loader, val_loader, _tok = build_everything(cfg)
 
-    # Compile note: first step(s) can be slower due to compilation overhead.
-    model = maybe_compile(model, enabled=bool(args.compile))
-
-    model.to(device)
-
     base_lr = float(cfg.train["lr"])
     weight_decay = float(cfg.train.get("weight_decay", 0.0))
     warmup_steps = int(cfg.train.get("warmup_steps", 0))
@@ -117,6 +186,7 @@ def main() -> None:
     grad_accum_steps = max(1, int(cfg.train.get("grad_accum_steps", 1)))
     log_every = int(cfg.train.get("log_every", 50))
     eval_every = int(cfg.train.get("eval_every", 0))
+    checkpoint_every = int(cfg.train.get("checkpoint_every", 5000))
 
     optimizer = build_optimizer(model, lr=base_lr, weight_decay=weight_decay)
     scheduler = WarmupCosineScheduler(
@@ -125,7 +195,28 @@ def main() -> None:
         max_steps=max_steps,
         min_lr=min_lr,
     )
-    scheduler.set_optimizer_lr(optimizer, step=0)
+
+    optimizer_step = 0
+    tokens_total = 0
+    best_val_ppl = float("inf")
+    if args.resume is not None:
+        ckpt = _load_checkpoint_state(Path(args.resume))
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scaler_state = ckpt.get("scaler")
+        if scaler_state is not None and grad_scaler.is_enabled():
+            grad_scaler.load_state_dict(scaler_state)
+        optimizer_step = int(ckpt.get("scheduler_step", ckpt.get("step", 0)))
+        tokens_total = int(ckpt.get("tokens_total", 0))
+        best_val_ppl = float(ckpt.get("best_val_ppl", float("inf")))
+        print(f"resumed checkpoint={args.resume} step={optimizer_step} tokens_total={tokens_total}", flush=True)
+
+    scheduler.set_optimizer_lr(optimizer, step=optimizer_step)
+
+    # Compile note: first step(s) can be slower due to compilation overhead.
+    model = maybe_compile(model, enabled=bool(args.compile))
+
+    model.to(device)
 
     seq_len_for_tokens = int(cfg.data.get("block_size", cfg.data.get("max_seq_len", 1)))
     tokens_per_microbatch = int(cfg.train["batch_size"]) * seq_len_for_tokens
@@ -133,6 +224,7 @@ def main() -> None:
     model_type = cfg.model.get("type", "standard_transformer")
     recursive = model_type == "recursive_transformer"
     recurrence_steps = int(cfg.model.get("depth", 1)) if recursive else 0
+    eval_depth = int(cfg.train.get("eval_depth", 6)) if recursive and bool(cfg.train.get("variable_depth_training", False)) else None
 
     total_params, trainable_params = count_parameters(model)
     print(f"model.type={model_type} recursive={recursive} recurrence_steps={recurrence_steps}", flush=True)
@@ -158,24 +250,34 @@ def main() -> None:
     print(model_stats.strip(), flush=True)
 
     train_log_path = out_dir / "train_log.csv"
-    train_log_f = train_log_path.open("w", encoding="utf-8", newline="")
+    train_log_exists = train_log_path.exists() and optimizer_step > 0
+    train_log_f = train_log_path.open("a" if train_log_exists else "w", encoding="utf-8", newline="")
     train_log = csv.writer(train_log_f)
-    train_log.writerow(["step", "loss", "lr", "tokens_step", "tokens_total", "wall_time_sec"])
+    if not train_log_exists:
+        train_log.writerow(["step", "loss", "lr", "tokens_step", "tokens_total", "wall_time_sec", "depth_used"])
+
+    eval_log_path = out_dir / "eval_log.csv"
+    eval_log_exists = eval_log_path.exists() and optimizer_step > 0
+    eval_log_f = eval_log_path.open("a" if eval_log_exists else "w", encoding="utf-8", newline="")
+    eval_log = csv.writer(eval_log_f)
+    if not eval_log_exists:
+        eval_log.writerow(["step", "val_perplexity", "val_loss", "eval_depth"])
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
 
     train_iter = iter(train_loader)
     micro_step = 0
-    optimizer_step = 0
-    tokens_total = 0
     accum_loss = 0.0
     tokens_this_step = 0
     interval_tokens = 0
     interval_start_time = time.time()
     step_start_time = interval_start_time
+    current_recurrence_steps = None
 
     pbar = _tqdm(max_steps, desc="train steps")
+    if pbar is not None and optimizer_step > 0:
+        pbar.update(optimizer_step)
 
     try:
         while optimizer_step < max_steps:
@@ -186,14 +288,16 @@ def main() -> None:
                 batch = next(train_iter)
 
             batch = {k: v.to(device) for k, v in batch.items()}
+            if recursive and micro_step % grad_accum_steps == 0:
+                current_recurrence_steps = _resolve_recurrence_steps(cfg, optimizer_step + 1, recursive=True)
 
             # ---- Forward (AMP if enabled) ----
             if use_amp:
                 with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                    out = model(**batch)
+                    out = model(**batch, recurrence_steps=current_recurrence_steps)
                     loss = out["loss"] if isinstance(out, dict) else out.loss
             else:
-                out = model(**batch)
+                out = model(**batch, recurrence_steps=current_recurrence_steps)
                 loss = out["loss"] if isinstance(out, dict) else out.loss
 
             loss_value = float(loss.item())
@@ -238,8 +342,17 @@ def main() -> None:
             step_end_time = time.time()
             step_wall_time = step_end_time - step_start_time
             train_log.writerow(
-                [optimizer_step, f"{avg_loss:.6f}", f"{lr:.12g}", step_tokens, tokens_total, f"{step_wall_time:.6f}"]
+                [
+                    optimizer_step,
+                    f"{avg_loss:.6f}",
+                    f"{lr:.12g}",
+                    step_tokens,
+                    tokens_total,
+                    f"{step_wall_time:.6f}",
+                    "" if current_recurrence_steps is None else current_recurrence_steps,
+                ]
             )
+            train_log_f.flush()
 
             interval_tokens += step_tokens
 
@@ -256,26 +369,82 @@ def main() -> None:
                 print(
                     f"step={optimizer_step}/{max_steps} "
                     f"loss={avg_loss:.4f} lr={lr:.6g} "
-                    f"tokens_step={step_tokens} tokens_total={tokens_total} tok_s={tokens_per_sec:.1f}",
+                    f"tokens_step={step_tokens} tokens_total={tokens_total} tok_s={tokens_per_sec:.1f} "
+                    f"depth={current_recurrence_steps if current_recurrence_steps is not None else '-'}",
                     flush=True,
                 )
                 interval_start_time = step_end_time
                 interval_tokens = 0
 
             if eval_every > 0 and optimizer_step % eval_every == 0:
-                # Eval uses existing compute_ppl (typically no_grad inside), keep it simple.
-                ppl = compute_ppl(model, val_loader, device=device)
-                print(f"eval step={optimizer_step} ppl={ppl:.4f}", flush=True)
+                val_loss, ppl = compute_eval_metrics(
+                    model,
+                    val_loader,
+                    device=device,
+                    recurrence_steps=eval_depth if recursive else None,
+                )
+                eval_log.writerow([optimizer_step, f"{ppl:.6f}", f"{val_loss:.6f}", "" if eval_depth is None else eval_depth])
+                eval_log_f.flush()
+                print(
+                    f"eval step={optimizer_step} ppl={ppl:.4f} "
+                    f"depth={eval_depth if eval_depth is not None else '-'}",
+                    flush=True,
+                )
+                if ppl < best_val_ppl:
+                    best_val_ppl = ppl
+                    _save_checkpoint(
+                        out_dir / "best.pt",
+                        model=model,
+                        optimizer=optimizer,
+                        scheduler_step=optimizer_step,
+                        grad_scaler=grad_scaler,
+                        tokens_total=tokens_total,
+                        best_val_ppl=best_val_ppl,
+                        config=cfg.to_dict(),
+                    )
                 model.train()
+
+            if checkpoint_every > 0 and optimizer_step % checkpoint_every == 0:
+                _save_checkpoint(
+                    out_dir / f"step_{optimizer_step}.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler_step=optimizer_step,
+                    grad_scaler=grad_scaler,
+                    tokens_total=tokens_total,
+                    best_val_ppl=best_val_ppl,
+                    config=cfg.to_dict(),
+                )
+                _save_checkpoint(
+                    out_dir / "last.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler_step=optimizer_step,
+                    grad_scaler=grad_scaler,
+                    tokens_total=tokens_total,
+                    best_val_ppl=best_val_ppl,
+                    config=cfg.to_dict(),
+                )
 
             step_start_time = time.time()
     finally:
         if pbar is not None:
             pbar.close()
         train_log_f.close()
+        eval_log_f.close()
 
-    torch.save(model.state_dict(), out_dir / "model.pt")
-    print(f"saved checkpoint: {out_dir / 'model.pt'}", flush=True)
+    _save_checkpoint(
+        out_dir / "last.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler_step=optimizer_step,
+        grad_scaler=grad_scaler,
+        tokens_total=tokens_total,
+        best_val_ppl=best_val_ppl,
+        config=cfg.to_dict(),
+    )
+    torch.save(getattr(model, "_orig_mod", model).state_dict(), out_dir / "model.pt")
+    print(f"saved checkpoint: {out_dir / 'last.pt'}", flush=True)
 
 
 if __name__ == "__main__":

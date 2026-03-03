@@ -13,7 +13,7 @@ class RecursiveTransformerLM(StandardTransformerLM):
 
     def __init__(self, cfg: TransformerConfig, depth: int = 6):
         cfg_dict = cfg.to_dict() if hasattr(cfg, "to_dict") else cfg.__dict__.copy()
-        cfg2 = TransformerConfig(**cfg_dict)
+        cfg2 = TransformerConfig.from_dict(cfg_dict)
 
         cfg2.num_encoder_layers = 0
         cfg2.num_decoder_layers = 1

@@ -64,7 +64,7 @@ class PackedLMDataset(Dataset):
                 if not text:
                     continue
 
-                ids = tokenizer.encode(text, add_special_tokens=False)
+                ids = _encode_without_length_warning(tokenizer, text)
                 if ids:
                     token_ids.extend(ids)
                     if eos_id is not None:
@@ -78,7 +78,7 @@ class PackedLMDataset(Dataset):
                 if not text:
                     continue
 
-                ids = tokenizer.encode(text, add_special_tokens=False)
+                ids = _encode_without_length_warning(tokenizer, text)
                 if ids:
                     token_ids.extend(ids)
                     if eos_id is not None:
@@ -106,3 +106,19 @@ class PackedLMDataset(Dataset):
             "attention_mask": attention_mask,
             "labels": labels,
         }
+
+
+def _encode_without_length_warning(tokenizer: Any, text: str) -> list[int]:
+    """Encode text without triggering model_max_length warnings during packing."""
+    try:
+        encoded = tokenizer(
+            text,
+            add_special_tokens=False,
+            truncation=False,
+            max_length=None,
+            verbose=False,
+        )
+        ids = encoded["input_ids"]
+        return list(ids)
+    except Exception:
+        return tokenizer.encode(text, add_special_tokens=False)

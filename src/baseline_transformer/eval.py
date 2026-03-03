@@ -6,15 +6,25 @@ import torch
 import torch.nn.functional as F
 
 
+def _safe_perplexity(val_loss: float) -> float:
+    try:
+        return math.exp(val_loss)
+    except OverflowError:
+        return float("inf")
+
+
 @torch.no_grad()
-def compute_ppl(model, dataloader, device: str) -> float:
+def compute_eval_metrics(model, dataloader, device: str, recurrence_steps: int | None = None) -> tuple[float, float]:
     model.eval()
     total_nll = 0.0
     total_tokens = 0
 
     for batch in dataloader:
         batch = {k: v.to(device) for k, v in batch.items()}
-        out = model(**batch)
+        if recurrence_steps is None:
+            out = model(**batch)
+        else:
+            out = model(**batch, recurrence_steps=recurrence_steps)
 
         logits = out["logits"] if isinstance(out, dict) else out.logits
         labels = batch["labels"]
@@ -33,6 +43,13 @@ def compute_ppl(model, dataloader, device: str) -> float:
         total_tokens += int((shift_labels != -100).sum().item())
 
     if total_tokens == 0:
-        return float("inf")
+        return float("inf"), float("inf")
 
-    return math.exp(total_nll / total_tokens)
+    val_loss = total_nll / total_tokens
+    return val_loss, _safe_perplexity(val_loss)
+
+
+@torch.no_grad()
+def compute_ppl(model, dataloader, device: str, recurrence_steps: int | None = None) -> float:
+    _loss, ppl = compute_eval_metrics(model, dataloader, device=device, recurrence_steps=recurrence_steps)
+    return ppl

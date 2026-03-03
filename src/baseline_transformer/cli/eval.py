@@ -13,6 +13,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, required=True)
     ap.add_argument("--ckpt", type=str, default=None)
+    ap.add_argument("--recurrence-steps", type=int, default=None)
     args = ap.parse_args()
 
     cfg = ExperimentConfig.load(args.config)
@@ -23,9 +24,11 @@ def main() -> None:
 
     if args.ckpt is not None:
         sd = torch.load(args.ckpt, map_location="cpu")
+        if isinstance(sd, dict) and "model" in sd:
+            sd = sd["model"]
         model.load_state_dict(sd)
 
-    ppl = compute_ppl(model, val_loader, device=device)
+    ppl = compute_ppl(model, val_loader, device=device, recurrence_steps=args.recurrence_steps)
     print(f"Perplexity: {ppl:.4f}")
 
 

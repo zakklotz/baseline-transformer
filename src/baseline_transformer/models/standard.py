@@ -26,6 +26,7 @@ class StandardTransformerLM(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
+        recurrence_steps: int | None = None,
     ):
         # nn-core uses key_padding_mask=True for PAD positions
         src_kpm = None
@@ -37,6 +38,7 @@ class StandardTransformerLM(nn.Module):
             tgt_ids=None,
             src_key_padding_mask=src_kpm,
             tgt_key_padding_mask=None,
+            recurrence_steps=recurrence_steps,
             return_aux=False,
         )
 
