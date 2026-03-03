@@ -19,6 +19,10 @@ class ExperimentConfig:
     @staticmethod
     def load(path: str | Path) -> "ExperimentConfig":
         path = Path(path)
+        if not path.exists() and not path.is_absolute():
+            repo_relative = Path(__file__).resolve().parents[2] / path
+            if repo_relative.exists():
+                path = repo_relative
         with path.open("r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
         return ExperimentConfig(**raw)
