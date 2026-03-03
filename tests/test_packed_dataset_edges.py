@@ -62,3 +62,31 @@ def test_packed_dataset_stride_increases_number_of_blocks():
     )
 
     assert len(overlap) > len(non_overlap)
+
+
+def test_packed_dataset_forwards_dataset_config(monkeypatch):
+    tok = _TinyTokenizer(eos_token_id=None)
+    seen = {}
+
+    def fake_load_lm_dataset(name, split, config_name=None):
+        seen["name"] = name
+        seen["split"] = split
+        seen["config_name"] = config_name
+        return [{"text": "abcd"}]
+
+    monkeypatch.setattr("baseline_transformer.data.packed_lm.load_lm_dataset", fake_load_lm_dataset)
+
+    ds = PackedLMDataset(
+        name="wikitext103",
+        split="train",
+        tokenizer=tok,
+        block_size=2,
+        dataset_config="wikitext-103-v1",
+    )
+
+    assert len(ds) > 0
+    assert seen == {
+        "name": "wikitext103",
+        "split": "train",
+        "config_name": "wikitext-103-v1",
+    }

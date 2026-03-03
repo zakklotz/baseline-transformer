@@ -41,6 +41,8 @@ def build_everything(cfg: ExperimentConfig):
     split_train = str(cfg.data.get("split_train", "train"))
     split_val = str(cfg.data.get("split_val", "validation"))
     ds_name = str(cfg.data["name"])
+    ds_config = cfg.data.get("dataset_config")
+    ds_config = str(ds_config) if ds_config is not None else None
 
     # Interpret data.stride as eval stride by default (safer comparisons)
     eval_stride = cfg.data.get("stride", None)
@@ -58,6 +60,7 @@ def build_everything(cfg: ExperimentConfig):
             tok,
             block_size=block_size,
             text_column=text_column,
+            dataset_config=ds_config,
             stride=train_stride,  # default None -> non-overlapping for train
         )
         val_ds = PackedLMDataset(
@@ -66,6 +69,7 @@ def build_everything(cfg: ExperimentConfig):
             tok,
             block_size=block_size,
             text_column=text_column,
+            dataset_config=ds_config,
             stride=eval_stride,   # optional overlap for eval
         )
 
@@ -84,8 +88,8 @@ def build_everything(cfg: ExperimentConfig):
 
     else:
         # Per-row tokenization path (HF dataset object + collator)
-        train_ds = load_lm_dataset(ds_name, split_train)
-        val_ds = load_lm_dataset(ds_name, split_val)
+        train_ds = load_lm_dataset(ds_name, split_train, config_name=ds_config)
+        val_ds = load_lm_dataset(ds_name, split_val, config_name=ds_config)
 
         collate = CausalLMCollator(tokenizer=tok, max_seq_len=max_seq_len)
 

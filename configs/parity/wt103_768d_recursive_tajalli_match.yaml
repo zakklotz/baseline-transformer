@@ -1,0 +1,47 @@
+seed: 1337
+out_dir: runs/wt103_768d_recursive_tajalli_match
+
+model:
+  type: recursive_transformer
+  # Fixed-depth recursive control. Tajalli uses a variable-depth curriculum,
+  # but this baseline architecture does not support that schedule.
+  depth: 8
+  transformer:
+    vocab_size: 50257
+    max_seq_len: 512
+    d_model: 768
+    n_heads: 12
+    n_layers: 1
+    d_ff: 3072
+    dropout: 0.0
+    positional: rope
+    attn_backend: sdpa
+    backend: manual
+    tie_weights: true
+
+data:
+  name: wikitext103
+  dataset_config: wikitext-103-v1
+  split_train: train
+  split_val: validation
+  tokenizer: gpt2
+  max_seq_len: 512
+  packing: true
+  block_size: 512
+  num_workers: 4
+
+train:
+  batch_size: 1
+  grad_accum_steps: 32
+  lr: 0.0006
+  min_lr: 0.00001
+  weight_decay: 0.1
+  warmup_steps: 1000
+  max_steps: 300000
+  grad_clip: 1.0
+  log_every: 100
+  eval_every: 2000
+  tf32: true
+  amp: true
+  amp_dtype: fp16
+  grad_scaler: true

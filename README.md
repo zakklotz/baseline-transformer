@@ -54,12 +54,15 @@ The explicit parity baseline configs are:
 
 - `configs/parity/wt103_512d_standard.yaml`
 - `configs/parity/wt103_512d_recursive.yaml`
+- `configs/parity/wt103_768d_recursive_tajalli_match.yaml`
 
 The original config remains available for backward compatibility:
 
 - `configs/parity/wt103_512d.yaml`
 
-All three define model shape, data/tokenizer settings, and training loop hyperparameters for fair comparisons.
+These configs define model shape, data/tokenizer settings, and training loop hyperparameters for fair comparisons.
+The `wt103_768d_recursive_tajalli_match.yaml` config is the closest paper-control match for Tajalli Phase 1:
+same GPT-2 tokenizer, `wikitext-103-v1`, sequence length 512, effective batch size 32, 300k steps, 768/12/3072 width, cosine decay to `1e-5`, and RoPE attention.
 
 ## Packed LM mode
 
@@ -73,6 +76,8 @@ Enable via config:
 data:
   packing: true
   block_size: 512  # defaults to data.max_seq_len if omitted
+  # optional Hugging Face dataset config override
+  # dataset_config: wikitext-103-v1
   # optional eval overlap (defaults to non-overlapping)
   # stride: 256
   # optional training overlap override (default: non-overlapping)

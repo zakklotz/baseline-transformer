@@ -36,6 +36,7 @@ class PackedLMDataset(Dataset):
         tokenizer: Any,
         block_size: int = 512,
         text_column: str = "text",
+        dataset_config: str | None = None,
         stride: int | None = None,
         texts: Iterable[str] | None = None,
     ):
@@ -52,7 +53,7 @@ class PackedLMDataset(Dataset):
         token_ids: list[int] = []
 
         if texts is None:
-            ds = load_lm_dataset(name, split)
+            ds = load_lm_dataset(name, split, config_name=dataset_config)
             total = len(ds) if hasattr(ds, "__len__") else None
             it = _tqdm(ds, total=total, desc=f"Packing {name}:{split}")
             for ex in it:
