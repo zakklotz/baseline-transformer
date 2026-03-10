@@ -28,10 +28,10 @@ class StandardTransformerLM(nn.Module):
         labels: torch.Tensor | None = None,
         recurrence_steps: int | None = None,
     ):
-        # nn-core uses key_padding_mask=True for PAD positions
+        # nn-core expects a boolean keep-mask: True=keep, False=mask.
         src_kpm = None
         if attention_mask is not None:
-            src_kpm = ~attention_mask.to(torch.bool)
+            src_kpm = attention_mask.to(torch.bool)
 
         out = self.model(
             src_ids=input_ids,

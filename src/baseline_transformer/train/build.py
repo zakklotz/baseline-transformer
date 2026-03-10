@@ -4,8 +4,13 @@ import os
 from torch.utils.data import DataLoader
 
 from baseline_transformer.config import ExperimentConfig
-from baseline_transformer.nncore_bridge import build_transformer_config
-from baseline_transformer.models import StandardTransformerLM, RecursiveTransformerLM
+from baseline_transformer.nncore_bridge import build_ofn_config, build_tajalliyat_config, build_transformer_config
+from baseline_transformer.models import (
+    OFNTransformerLM,
+    RecursiveTransformerLM,
+    StandardTransformerLM,
+    TajalliyatTransformerLM,
+)
 
 from baseline_transformer.data import get_tokenizer, CausalLMCollator, load_lm_dataset
 from baseline_transformer.data.packed_lm import PackedLMDataset
@@ -108,14 +113,14 @@ def build_everything(cfg: ExperimentConfig):
             collate_fn=collate,
         )
 
-    # --- Model config (nn-core TransformerConfig) ---
-    tcfg = build_transformer_config(cfg.model)
     model_type = cfg.model.get("type", "standard_transformer")
 
     if model_type == "standard_transformer":
+        tcfg = build_transformer_config(cfg.model)
         model = StandardTransformerLM(tcfg)
 
     elif model_type == "recursive_transformer":
+        tcfg = build_transformer_config(cfg.model)
         depth = int(cfg.model.get("depth", 6))
 
         # Force unambiguous semantics: 1 shared decoder block repeated depth times
@@ -125,6 +130,14 @@ def build_everything(cfg: ExperimentConfig):
         tcfg.recurrence_steps = depth
 
         model = RecursiveTransformerLM(tcfg, depth=depth)
+
+    elif model_type == "tajalliyat":
+        taj_cfg = build_tajalliyat_config(cfg.model)
+        model = TajalliyatTransformerLM(taj_cfg)
+
+    elif model_type == "ofn":
+        ofn_cfg = build_ofn_config(cfg.model)
+        model = OFNTransformerLM(ofn_cfg)
 
     else:
         raise ValueError(f"Unknown model.type: {model_type}")

@@ -48,43 +48,14 @@ class PackedLMDataset(Dataset):
         if step <= 0:
             raise ValueError("stride must be > 0 when provided")
 
-        eos_id = getattr(tokenizer, "eos_token_id", None)
-
-        token_ids: list[int] = []
-
-        if texts is None:
-            ds = load_lm_dataset(name, split, config_name=dataset_config)
-            total = len(ds) if hasattr(ds, "__len__") else None
-            it = _tqdm(ds, total=total, desc=f"Packing {name}:{split}")
-            for ex in it:
-                text = ex.get(text_column, "")
-                if not isinstance(text, str):
-                    continue
-                text = text.strip()
-                if not text:
-                    continue
-
-                ids = _encode_without_length_warning(tokenizer, text)
-                if ids:
-                    token_ids.extend(ids)
-                    if eos_id is not None:
-                        token_ids.append(int(eos_id))
-        else:
-            it = _tqdm(texts, desc="Packing texts")
-            for text in it:
-                if not isinstance(text, str):
-                    continue
-                text = text.strip()
-                if not text:
-                    continue
-
-                ids = _encode_without_length_warning(tokenizer, text)
-                if ids:
-                    token_ids.extend(ids)
-                    if eos_id is not None:
-                        token_ids.append(int(eos_id))
-
-        self.stream = torch.tensor(token_ids, dtype=torch.long)
+        self.stream = build_packed_token_stream(
+            name=name,
+            split=split,
+            tokenizer=tokenizer,
+            text_column=text_column,
+            dataset_config=dataset_config,
+            texts=texts,
+        )
 
         if self.stream.numel() < self.block_size:
             self.starts: list[int] = []
@@ -106,6 +77,89 @@ class PackedLMDataset(Dataset):
             "attention_mask": attention_mask,
             "labels": labels,
         }
+
+
+def build_packed_token_stream(
+    *,
+    name: str,
+    split: str,
+    tokenizer: Any,
+    text_column: str = "text",
+    dataset_config: str | None = None,
+    texts: Iterable[str] | None = None,
+) -> torch.Tensor:
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    token_ids: list[int] = []
+
+    if texts is None:
+        ds = load_lm_dataset(name, split, config_name=dataset_config)
+        total = len(ds) if hasattr(ds, "__len__") else None
+        it = _tqdm(ds, total=total, desc=f"Packing {name}:{split}")
+        for ex in it:
+            text = ex.get(text_column, "")
+            if not isinstance(text, str):
+                continue
+            text = text.strip()
+            if not text:
+                continue
+
+            ids = _encode_without_length_warning(tokenizer, text)
+            if ids:
+                token_ids.extend(ids)
+                if eos_id is not None:
+                    token_ids.append(int(eos_id))
+    else:
+        it = _tqdm(texts, desc="Packing texts")
+        for text in it:
+            if not isinstance(text, str):
+                continue
+            text = text.strip()
+            if not text:
+                continue
+
+            ids = _encode_without_length_warning(tokenizer, text)
+            if ids:
+                token_ids.extend(ids)
+                if eos_id is not None:
+                    token_ids.append(int(eos_id))
+
+    return torch.tensor(token_ids, dtype=torch.long)
+
+
+def build_packed_next_token_blocks(
+    *,
+    name: str,
+    split: str,
+    tokenizer: Any,
+    seq_len: int,
+    text_column: str = "text",
+    dataset_config: str | None = None,
+    stride: int | None = None,
+    texts: Iterable[str] | None = None,
+) -> list[torch.Tensor]:
+    if seq_len <= 0:
+        raise ValueError("seq_len must be > 0.")
+    step = seq_len if stride is None else int(stride)
+    if step <= 0:
+        raise ValueError("stride must be > 0 when provided.")
+
+    stream = build_packed_token_stream(
+        name=name,
+        split=split,
+        tokenizer=tokenizer,
+        text_column=text_column,
+        dataset_config=dataset_config,
+        texts=texts,
+    )
+    window = seq_len + 1
+    if stream.numel() < window:
+        return []
+
+    blocks: list[torch.Tensor] = []
+    max_start = stream.numel() - window
+    for start in range(0, max_start + 1, step):
+        blocks.append(stream[start : start + window].clone())
+    return blocks
 
 
 def _encode_without_length_warning(tokenizer: Any, text: str) -> list[int]:

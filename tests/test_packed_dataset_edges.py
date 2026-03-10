@@ -1,6 +1,6 @@
 import torch
 
-from baseline_transformer.data.packed_lm import PackedLMDataset
+from baseline_transformer.data.packed_lm import PackedLMDataset, build_packed_next_token_blocks
 
 
 class _TinyTokenizer:
@@ -90,3 +90,19 @@ def test_packed_dataset_forwards_dataset_config(monkeypatch):
         "split": "train",
         "config_name": "wikitext-103-v1",
     }
+
+
+def test_build_packed_next_token_blocks_uses_training_contract():
+    tok = _TinyTokenizer(eos_token_id=99)
+    blocks = build_packed_next_token_blocks(
+        name="unused",
+        split="validation",
+        tokenizer=tok,
+        seq_len=3,
+        stride=3,
+        texts=["ab", "cd"],
+    )
+
+    assert [block.tolist() for block in blocks] == [
+        [97, 98, 99, 99],
+    ]

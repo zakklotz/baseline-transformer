@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from nncore.models import TransformerConfig
+from nncore.models import OFNConfig, TajalliyatConfig, TransformerConfig
 from nncore.models.config import AttentionConfig, BlockConfig
 
 
@@ -101,4 +101,100 @@ def build_transformer_config(model_cfg: Dict[str, Any]) -> TransformerConfig:
         attn=attn,
         block=block,
     )
+
+
+def build_tajalliyat_config(model_cfg: Dict[str, Any]) -> TajalliyatConfig:
+    """
+    Convert our project-friendly Tajalliyat config into nn-core's TajalliyatConfig.
+
+    Expected YAML under model.tajalliyat:
+      vocab_size: int
+      max_seq_len: int
+      d_model: int
+      n_heads: int
+      num_layers: int
+      dropout: float
+      ffn_mult: float
+      tie_weights: bool
+      return_hidden: bool
+      positional: str
+      attn_backend: str
+      norm: str
+      norm_eps: float
+      use_attention: bool
+      use_cnn: bool
+      use_mamba: bool
+      fusion_type: str
+      cnn_kernel_size: int
+      mamba_d_state: int
+      mamba_d_conv: int
+      mamba_expand: int
+      attention_branch_proj: bool
+      cnn_branch_proj: bool
+      mamba_branch_proj: bool
+      branch_dropout: float
+      branch_scheduler: str
+    """
+    if "tajalliyat" not in model_cfg:
+        raise KeyError("model.tajalliyat missing from config")
+
+    t = dict(model_cfg["tajalliyat"])
+    return TajalliyatConfig(
+        vocab_size=int(t.get("vocab_size", 32000)),
+        d_model=int(t.get("d_model", 512)),
+        n_heads=int(t.get("n_heads", 8)),
+        max_seq_len=int(t.get("max_seq_len", 2048)),
+        num_layers=int(t.get("num_layers", 6)),
+        tie_weights=bool(t.get("tie_weights", True)),
+        return_hidden=bool(t.get("return_hidden", False)),
+        positional=str(t.get("positional", "absolute")),
+        attn_backend=str(t.get("attn_backend", "sdpa")),
+        norm=str(t.get("norm", "layernorm")),
+        norm_eps=float(t.get("norm_eps", 1e-5)),
+        dropout=float(t.get("dropout", 0.0)),
+        ffn_mult=float(t.get("ffn_mult", 4.0)),
+        use_attention=bool(t.get("use_attention", True)),
+        use_cnn=bool(t.get("use_cnn", False)),
+        use_mamba=bool(t.get("use_mamba", False)),
+        fusion_type=str(t.get("fusion_type", "sum")),
+        cnn_kernel_size=int(t.get("cnn_kernel_size", 3)),
+        mamba_d_state=int(t.get("mamba_d_state", 64)),
+        mamba_d_conv=int(t.get("mamba_d_conv", 4)),
+        mamba_expand=int(t.get("mamba_expand", 2)),
+        attention_branch_proj=bool(t.get("attention_branch_proj", False)),
+        cnn_branch_proj=bool(t.get("cnn_branch_proj", False)),
+        mamba_branch_proj=bool(t.get("mamba_branch_proj", False)),
+        branch_dropout=float(t.get("branch_dropout", 0.0)),
+        branch_scheduler=str(t.get("branch_scheduler", "auto")),
+    )
+
+
+def build_ofn_config(model_cfg: Dict[str, Any]) -> OFNConfig:
+    """
+    Convert our project-friendly OFN config into nn-core's OFNConfig.
+
+    Expected YAML under model.ofn:
+      vocab_size: int
+      max_seq_len: int
+      d_model: int
+      n_heads: int
+      num_layers: int
+      dropout: float
+      ffn_mult: float
+      tie_weights: bool
+      return_hidden: bool
+      positional: str
+      attn_backend: str
+      norm: str
+      norm_eps: float
+      field: {enabled, slots, d_field, builder, ema_timescales, conditioning, feedback, feedback_scale}
+      operators:
+        local: {enabled, d_hidden, kernel_size}
+        attention: {enabled, mode, window_size}
+      mediator: {mode, d_imaginal, gate_hidden}
+    """
+    if "ofn" not in model_cfg:
+        raise KeyError("model.ofn missing from config")
+
+    return OFNConfig.from_dict(dict(model_cfg["ofn"]))
   

@@ -140,6 +140,10 @@ def main() -> None:
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if cfg.model.get("type") == "tajalliyat":
+        tajalliyat_cfg = cfg.model.setdefault("tajalliyat", {})
+        tajalliyat_cfg.setdefault("branch_scheduler", "auto")
+
     save_resolved_config(cfg.to_dict(), out_dir)
     save_command(out_dir)
     save_git_commit(out_dir)
@@ -176,6 +180,7 @@ def main() -> None:
 
     print("building model + dataloaders...", flush=True)
     model, train_loader, val_loader, _tok = build_everything(cfg)
+    seq_len_for_tokens = int(cfg.data.get("block_size", cfg.data.get("max_seq_len", 1)))
 
     base_lr = float(cfg.train["lr"])
     weight_decay = float(cfg.train.get("weight_decay", 0.0))
@@ -212,16 +217,35 @@ def main() -> None:
         print(f"resumed checkpoint={args.resume} step={optimizer_step} tokens_total={tokens_total}", flush=True)
 
     scheduler.set_optimizer_lr(optimizer, step=optimizer_step)
+    model.to(device)
 
+    model_type = cfg.model.get("type", "standard_transformer")
+    if model_type == "tajalliyat" and hasattr(model, "branch_scheduler_status"):
+        status = model.branch_scheduler_status(
+            device=device,
+            compiled=bool(args.compile),
+            dtype=autocast_dtype if use_amp else None,
+            batch_size=int(cfg.train["batch_size"]),
+            seq_len=seq_len_for_tokens,
+        )
+        print(
+            "tajalliyat.branch_scheduler "
+            f"configured={status['configured']} "
+            f"resolved={status['resolved']} "
+            f"active_branches={','.join(status['active_branches']) or '-'}",
+            flush=True,
+        )
+        fallback_reason = status.get("fallback_reason")
+        if fallback_reason:
+            print(
+                f"tajalliyat.branch_scheduler_fallback={fallback_reason}",
+                flush=True,
+            )
     # Compile note: first step(s) can be slower due to compilation overhead.
     model = maybe_compile(model, enabled=bool(args.compile))
 
-    model.to(device)
-
-    seq_len_for_tokens = int(cfg.data.get("block_size", cfg.data.get("max_seq_len", 1)))
     tokens_per_microbatch = int(cfg.train["batch_size"]) * seq_len_for_tokens
     tokens_per_step = tokens_per_microbatch * grad_accum_steps
-    model_type = cfg.model.get("type", "standard_transformer")
     recursive = model_type == "recursive_transformer"
     recurrence_steps = int(cfg.model.get("depth", 1)) if recursive else 0
     eval_depth = int(cfg.train.get("eval_depth", 6)) if recursive and bool(cfg.train.get("variable_depth_training", False)) else None
